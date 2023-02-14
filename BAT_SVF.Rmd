@@ -1,0 +1,114 @@
+---
+title: "Analysis of BAT SVF"
+output:
+  pdf_document: default
+  html_document: default
+date: "2022-11-06"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+#Read Data
+setwd('C:/Users/thupe/Desktop/Nature Meta_scBAT')
+library(magrittr)
+library(tidyverse)
+library(Seurat)
+library(future)
+scBAT_matrix<- ReadMtx(mtx = 'filtered_raw_counts_all_clusters.mtx', cells = 'barcodes_filtered_raw_counts_all_clusters.tsv',features = 'genes_filtered_raw_counts_all_clusters.tsv',feature.column = 1)
+
+scBAT_mouse_dataset <- CreateSeuratObject(counts = scBAT_matrix, min.cells = 3, min.features = 200, project = "cellranger")
+```
+
+
+```{r}
+# Quality control (based on mitochondrial and ribosomal features)
+scBAT_mouse_dataset[["percent.mt"]] <- PercentageFeatureSet(scBAT_mouse_dataset, pattern = "^MT-")
+scBAT_mouse_dataset[['percent.rb']] <- PercentageFeatureSet(scBAT_mouse_dataset,pattern = '^RP[SL]')
+VlnPlot(scBAT_mouse_dataset, features = c("nFeature_RNA", "nCount_RNA"), ncol = 2)
+scBAT_mouse_dataset <- subset(scBAT_mouse_dataset, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5 & percent.rb < 5)
+
+# Normalisation
+scBAT_mouse_dataset <- NormalizeData(scBAT_mouse_dataset, normalization.method = "LogNormalize", scale.factor = 10000)
+# Find Variable Features
+scBAT_mouse_dataset <- FindVariableFeatures(scBAT_mouse_dataset, selection.method = "vst", nfeatures = 2000)
+top10 <- head(VariableFeatures(scBAT_mouse_dataset), 10)
+plot1 <- VariableFeaturePlot(scBAT_mouse_dataset)
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1 + plot2
+# Scale Data
+all.genes <- rownames(scBAT_mouse_dataset)
+scBAT_mouse_dataset <- ScaleData(scBAT_mouse_dataset, features = all.genes)
+
+```
+
+
+```{r}
+#PCA_Linear Dimention Reduction Algorithm
+scBAT_mouse_dataset <- RunPCA(scBAT_mouse_dataset, features = VariableFeatures(object = scBAT_mouse_dataset))
+VizDimLoadings(scBAT_mouse_dataset, dims = 1:2, reduction = "pca")
+DimPlot(scBAT_mouse_dataset, reduction = "pca")
+# Find out the dimension of the dataset
+scBAT_mouse_dataset <- JackStraw(scBAT_mouse_dataset, num.replicate = 100)
+scBAT_mouse_dataset <- ScoreJackStraw(scBAT_mouse_dataset, dims = 1:20)
+JackStrawPlot(scBAT_mouse_dataset, dims = 1:15)
+# Clustering
+scBAT_mouse_dataset <- FindNeighbors(scBAT_mouse_dataset, dims = 1:15)
+Graphs(scBAT_mouse_dataset) #optional: to check graph name
+scBAT_mouse_dataset <- FindClusters(scBAT_mouse_dataset, resolution = 0.5)
+head(Idents(scBAT_mouse_dataset),5) #Show the cluster ID of the top 5 cells
+table(scBAT_mouse_dataset@meta.data$seurat_clusters)
+#UMAP
+scBAT_mouse_dataset <- RunUMAP(scBAT_mouse_dataset, dims = 1:15)
+DimPlot(scBAT_mouse_dataset, reduction = "umap", label = TRUE,group.by = "seurat_clusters") + NoLegend()
+saveRDS(scBAT_mouse_dataset, file = 'scBAT_mouse_dataset.rds')
+
+#labelling
+scBAT_mouse_dataset<-readRDS('scBAT_mouse_dataset.rds')
+scBAT_markers <- FindAllMarkers(scBAT_mouse_dataset, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+scBAT_markers %>% as_tibble() %>% group_by(cluster) %>% distinct() %>% left_join(.,annotables::grcm38 %>% select(symbol,chr,ensgene,biotype,description),by=c("gene"="symbol")) %>% distinct() %>% write_csv(.,file = "cluster.markers_res0.5.csv")
+DotPlot(object=scBAT_mouse_dataset, features = c('cd3e','Trac','Klrk1','Adgre1','Lyz2','H2-Ea','Csf1r'),group.by = "seurat_clusters")
+ DotPlot(object=scBAT_mouse_dataset, features = c('Npy1r','Pdgfrb','Cspg4','Des','Rgs5','Acta2','Myh11','Mylk'),group.by = "seurat_clusters")#mural cell markers
+DotPlot(object=scBAT_mouse_dataset, features = c('Il7r','Cd3e','Ighm','Klrk1','Fcer1a','Itgam','Itgax','Lyz2','Fcgr4','Adgre1','Csf1r'),group.by = "seurat_clusters")#immune cell markers
+DotPlot(object=scBAT_mouse_dataset, features = c('Pecam1','Cdh5','Fbln5','Glul','Rgcc','Lcn2','Kdr','Lyve1'),group.by = "seurat_clusters")#endothelium marker
+
+cell_id <- tibble(seurat_clusters=factor(0:27),cell_type=c('B Cell_1','T Cell_1','B Cell_2','Mural Cell TypeII_1','NK_1','NKT','MonoMF','Capillary Endothelium','B Cell_3','Adipocyte_1','Mesenchymal Progenitor','Artery Endothelium_1','Adipocyte_2','CD20+ T Cell','Neutrophil','Mural Cell TypeI','T Cell_2','Schwann Cell_Nonmyelinated','B Cell_4','T Cell_3','Mast Cell','Mural Cell TypeII_2','Lymphoid Progenitor','Schwann Cell_Myelinated','Artery Endothelium_2','NK_2','Lymphatic Endothelium','NK_3'),cell_type_general=c('B Cell','T Cell','B Cell','Mural Cell TypeII','NK','NKT','MonoMF','Capillary Endothelium','B Cell','Adipocyte','Mesenchymal Progeintor','Artery Endothelium','Adipocyte','Cd20+ T Cell','Neutrophil','Mural Cell TypeI','T Cell','Schwann Cell-Nonmyelinated','B Cell','T Cell','Mast Cell','Mural Cell TypeII','Lymphoid Progenitor','Schwann Cell-Myelinated','Artery Endothelium','NK','Lymphatic Endothelium','NK'))
+cell.metadata <- scBAT_mouse_dataset@meta.data %>% rownames_to_column("id")
+cell.metadata <- cell.metadata %>% left_join(cell_id,by="seurat_clusters")
+scBAT_mouse_dataset <- AddMetaData(scBAT_mouse_dataset,metadata = column_to_rownames(cell.metadata,var = "id"))
+saveRDS(scBAT_mouse_dataset, file = 'scBAT_mouse_dataset_res0.5.rds')
+```
+
+
+```{r}
+# Visualization
+scBAT_mouse_dataset<- readRDS('scBAT_mouse_dataset.rds')
+
+DimPlot(scBAT_mouse_dataset, reduction = "umap", label = TRUE,group.by = "cell_type_general") + NoLegend()
+VlnPlot(object = scBAT_mouse_dataset, features = c("Npy"),pt.size=0,group.by = "cell_type_general",same.y.lims = 1)+NoLegend()
+FeaturePlot(object=scBAT_mouse_dataset, features = c('Npy'), pt.size = 1,cols = c('gray','blue'))
+FeatureScatter(object = scBAT_mouse_dataset, feature1 = c('Npy1r'), feature2 = c('Rgs5'),pt.size = 1,group.by = "cell_type_general" )
+DotPlot(object=scBAT_mouse_dataset, features = c('Npy1r', 'Adrb1','Adrb2', 'Adrb3', 'Adra1a', 'Adra1b','Adra2a','Adra2b'),group.by = "cell_type_general")
+```
+
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
